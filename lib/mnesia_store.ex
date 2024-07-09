@@ -15,34 +15,35 @@ defmodule MnesiaStore do
   end
 
   @spec put(tuple()) :: :ok | {:error, term()}
-  def put(record) do
-    case :mnesia.transaction(fn -> :mnesia.write(record) end) do
-      {:atomic, result} -> result
-      {:aborted, reason} -> {:error, reason}
-    end
-  end
+  def put(record), do: transaction(fn -> :mnesia.write(record) end)
 
   @spec fetch(atom(), term()) :: {:ok, term()} | {:error, term()}
-  def fetch(tab_name, id) do
-    case :mnesia.transaction(fn -> :mnesia.read(tab_name, id) end) do
+  def fetch(tab_name, id), do: one(fn -> :mnesia.read(tab_name, id) end)
+
+  @spec match(term()) :: {:ok, term()} | {:error, term()}
+  def match(matcher), do: transaction(fn -> :mnesia.match_object(matcher) end)
+
+  @spec match_one(term()) :: {:ok, term()} | {:error, term}
+  def match_one(matcher), do: one(fn -> :mnesia.match_object(matcher) end)
+
+  @spec remove(atom(), term()) :: {:ok, term()} | {:error, term()}
+  def remove(tab_name, id), do: transaction(fn -> :mnesia.delete(tab_name, id, :write) end)
+
+  @spec select(atom(), :ets.match_spec()) :: term()
+  def select(tab_name, spec), do: transaction(fn -> :mnesia.select(tab_name, spec) end)
+
+  defp one(f) do
+    case :mnesia.transaction(f) do
       {:atomic, []} -> {:error, :not_found}
       {:atomic, [record]} -> {:ok, record}
       {:aborted, reason} -> {:error, reason}
     end
   end
 
-  @spec remove(atom(), term()) :: {:ok, term()} | {:error, term()}
-  def remove(tab_name, id) do
-    case :mnesia.transaction(fn -> :mnesia.delete(tab_name, id, :write) end) do
-      {:atomic, result} -> result
-      {:aborted, reason} -> {:error, reason}
-    end
-  end
-
-  @spec select(atom(), :ets.match_spec()) :: term()
-  def select(tab_name, spec) do
-    case :mnesia.transaction(fn -> :mnesia.select(tab_name, spec) end) do
-      {:atomic, result} -> result
+  defp transaction(f) do
+    case :mnesia.transaction(f) do
+      {:atomic, :ok} -> :ok
+      {:atomic, result} -> {:ok, result}
       {:aborted, reason} -> {:error, reason}
     end
   end
