@@ -9,7 +9,8 @@ defmodule MnesiaStore do
   def init_mnesia_table(tab_name, attributes) do
     nodes = db_nodes()
     {:ok, nodes_alive} = :mnesia.change_config(:extra_db_nodes, nodes)
-    Logger.debug("Change mnesia config", nodes: nodes_alive)
+    nodes_alive_list = Enum.join(nodes_alive, ", ")
+    Logger.info("Change mnesia config. Nodes alive are: [#{nodes_alive_list}]")
     create_table(tab_name, attributes, nodes)
   end
 
@@ -54,7 +55,7 @@ defmodule MnesiaStore do
 
     case :mnesia.create_table(tab_name, options) do
       {:atomic, :ok} ->
-        Logger.info("Table [#{tab_name}] was successfully created", tab_name: tab_name)
+        Logger.info("Table [#{tab_name}] was successfully created")
 
       {:aborted, {:already_exists, ^tab_name}} ->
         add_table_copy(tab_name)
@@ -66,12 +67,10 @@ defmodule MnesiaStore do
 
     case :mnesia.add_table_copy(tab_name, node(), :ram_copies) do
       {:atomic, :ok} ->
-        Logger.info("Copy of [#{tab_name}] was successfully added to current node",
-          tab_name: tab_name
-        )
+        Logger.info("Copy of [#{tab_name}] was successfully added to current node")
 
       {:aborted, {:already_exists, ^tab_name, _node}} ->
-        Logger.info("Copy of [#{tab_name}] is already added to current node", tab_name: tab_name)
+        Logger.info("Copy of [#{tab_name}] is already added to current node")
 
       {:aborted, reason} ->
         {:error, reason}

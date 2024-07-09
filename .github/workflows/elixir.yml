@@ -1,0 +1,43 @@
+name: Elixir CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Elixir
+      uses: erlef/setup-beam@a6e26b22319003294c58386b6f25edbc7336819a # v1.18.0
+      with:
+        version-file: ".tool-versions"
+        version-type: strict
+
+    - name: Restore dependencies cache
+      uses: actions/cache@v3
+      with:
+        path: deps
+        key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+        restore-keys: ${{ runner.os }}-mix-
+
+    - run: mix deps.get
+    - run: mix deps.unlock --check-unused
+    - run: mix deps.compile
+    - run: mix deps.audit
+    - run: mix hex.audit
+    - run: mix compile --warnings-as-errors
+    - run: mix format --check-formatted
+    - run: mix credo
+    - run: mix test
+    - run: mix dialyzer
