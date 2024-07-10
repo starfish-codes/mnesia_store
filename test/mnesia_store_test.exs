@@ -8,7 +8,7 @@ defmodule MnesiaStoreTest do
 
       tab_name = :person
       attrs = ~w[name age gender]a
-      :erpc.multicall(nodes, MnesiaStore, :init_mnesia_table, [tab_name, attrs])
+      :erpc.multicall(nodes, MnesiaStore, :init_table, [tab_name, attrs])
 
       %{nodes: nodes, tab_name: tab_name, attrs: attrs}
     end
@@ -25,7 +25,7 @@ defmodule MnesiaStoreTest do
       assert {:ok, ^person1} = :erpc.call(node2, MnesiaStore, :fetch, [tab_name, "bob"])
 
       [node3] = HayCluster.start_nodes(:mnesia_extra, 1, applications: [:mnesia])
-      assert :ok = :erpc.call(node3, MnesiaStore, :init_mnesia_table, [tab_name, attrs])
+      assert :ok = :erpc.call(node3, MnesiaStore, :init_table, [tab_name, attrs])
       person2 = {tab_name, "alice", 47, :female}
 
       :ok = :erpc.call(node3, MnesiaStore, :put, [person2])
@@ -42,7 +42,7 @@ defmodule MnesiaStoreTest do
   describe "search" do
     setup do
       attrs = ~w[name calories price group]a
-      :ok = MnesiaStore.init_mnesia_table(:food, attrs)
+      :ok = MnesiaStore.init_table(:food, attrs)
       :ok = MnesiaStore.put({:food, :salmon, 88, 4.00, :meat})
       :ok = MnesiaStore.put({:food, :cereals, 178, 2.79, :bread})
       :ok = MnesiaStore.put({:food, :milk, 150, 3.23, :dairy})
