@@ -78,6 +78,9 @@ defmodule MnesiaStore.Resource do
         |> MnesiaStore.put()
       end
 
+      @spec delete(term) :: :ok | {:error, term()}
+      def delete(key), do: MnesiaStore.remove(@tab_name, key)
+
       @spec evict_expired() :: :ok
       def evict_expired() do
         now = DateTime.to_unix(DateTime.utc_now())
@@ -86,7 +89,7 @@ defmodule MnesiaStore.Resource do
         return = [:"$1"]
 
         with {:ok, keys} <- MnesiaStore.select(@tab_name, [{pattern, conditions, return}]) do
-          Enum.each(keys, fn key -> MnesiaStore.remove(@tab_name, key) end)
+          Enum.each(keys, &delete/1)
         end
       end
 

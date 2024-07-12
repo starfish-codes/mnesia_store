@@ -33,14 +33,17 @@ defmodule MnesiaStore.ResourceTest do
       assert Process.alive?(pid)
     end
 
-    test "put/fetch" do
+    test "put/fetch/delete" do
       key = "some-unique-key"
       value = %{foo: :bar}
 
       assert {:error, :empty_key} = Session.put(nil, value)
+
       assert :ok = Session.put(key, value)
       assert {:ok, ^value} = Session.fetch(key)
-      assert {:error, :not_found} = Session.fetch("non-existant-key")
+
+      assert :ok = Session.delete(key)
+      assert {:error, :not_found} = Session.fetch(key)
     end
 
     test "evict_expired/0" do
