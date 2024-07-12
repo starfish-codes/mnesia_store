@@ -65,7 +65,7 @@ defmodule MnesiaStore.Resource do
         end
       end
 
-      @spec put(term(), term()) :: {:ok, term()} | {:error, term()}
+      @spec put(term(), term()) :: :ok | {:error, term()}
       def put(nil, _value) do
         {:error, :empty_key}
       end
