@@ -5,8 +5,8 @@ defmodule MnesiaStore do
 
   require Logger
 
-  @spec init_mnesia_table(atom(), [atom()]) :: :ok | {:error, term()}
-  def init_mnesia_table(tab_name, attributes) do
+  @spec init_table(atom(), [atom()]) :: :ok | {:error, term()}
+  def init_table(tab_name, attributes) do
     nodes = db_nodes()
     {:ok, nodes_alive} = :mnesia.change_config(:extra_db_nodes, nodes)
     nodes_alive_list = Enum.join(nodes_alive, ", ")
