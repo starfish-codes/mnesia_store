@@ -38,21 +38,13 @@ defmodule MnesiaStore.Resource do
       def start_link(init_arg), do: Supervisor.start_link(__MODULE__, init_arg)
 
       @impl Supervisor
-      def init(init_arg) do
-        basic = [resource_spec(init_arg)]
-
-        children =
-          if is_integer(@expires_in_minutes) and @expires_in_minutes > 0 do
-            [{Highlander, cleaner_spec()} | basic]
-          else
-            basic
-          end
-
+      def init(_init_arg) do
+        children = unquote(__MODULE__).child_specs(__MODULE__, @expires_in_minutes)
         Supervisor.init(children, strategy: :one_for_one)
       end
 
-      @spec init_table(Keyword.t()) :: :ignore | {:error, term()}
-      def init_table(_init_arg) do
+      @spec init_table() :: :ignore | {:error, term()}
+      def init_table() do
         with :ok <- MnesiaStore.init_table(@tab_name, Keyword.keys(@attributes)) do
           :ignore
         end
@@ -92,20 +84,6 @@ defmodule MnesiaStore.Resource do
           Enum.each(keys, &delete/1)
         end
       end
-
-      defp resource_spec(init_arg) do
-        %{
-          id: __MODULE__,
-          start: {__MODULE__, :init_table, [init_arg]}
-        }
-      end
-
-      defp cleaner_spec do
-        %{
-          id: __MODULE__.Cleaner,
-          start: {MnesiaStore.Cleaner, :start_link, [__MODULE__]}
-        }
-      end
     end
   end
 
@@ -117,4 +95,22 @@ defmodule MnesiaStore.Resource do
   end
 
   def calc_expires_at(_minutes), do: :infinity
+
+  @spec child_specs(module(), term()) :: [Supervisor.module_spec()]
+  def child_specs(mod, expires_in) do
+    basic = [resource_spec(mod)]
+
+    if is_integer(expires_in) and expires_in > 0 do
+      [{Highlander, cleaner_spec(mod)} | basic]
+    else
+      basic
+    end
+  end
+
+  defp resource_spec(mod),
+    do: %{id: mod, start: {mod, :init_table, []}}
+
+  defp cleaner_spec(mod),
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    do: %{id: Module.concat(mod, "Cleaner"), start: {MnesiaStore.Cleaner, :start_link, [mod]}}
 end
