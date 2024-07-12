@@ -24,3 +24,6 @@ mnesia_store-*.tar
 
 # Temporary files, for example, from tests.
 /tmp/
+
+# Node.js dependencies directory
+node_modules
