@@ -1,6 +1,9 @@
 # MnesiaStore
 
-**TODO: Add description**
+A thin wrapper for Mnesia.
+
+- Uses `:ram_copies` only
+- Tries to copy tables on all available nodes
 
 ## Installation
 
