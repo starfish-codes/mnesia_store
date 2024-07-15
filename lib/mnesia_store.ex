@@ -26,7 +26,7 @@ defmodule MnesiaStore do
   @spec match_one(term()) :: {:ok, term()} | {:error, term}
   def match_one(matcher), do: one(fn -> :mnesia.match_object(matcher) end)
 
-  @spec remove(atom(), term()) :: {:ok, term()} | {:error, term()}
+  @spec remove(atom(), term()) :: :ok | {:error, term()}
   def remove(tab_name, id), do: transaction(fn -> :mnesia.delete(tab_name, id, :write) end)
 
   @spec select(atom(), :ets.match_spec()) :: term()
