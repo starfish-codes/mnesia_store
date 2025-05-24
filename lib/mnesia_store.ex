@@ -32,6 +32,15 @@ defmodule MnesiaStore do
   @spec select(atom(), :ets.match_spec()) :: term()
   def select(tab_name, spec), do: transaction(fn -> :mnesia.select(tab_name, spec) end)
 
+  @spec all(atom()) :: {:ok, [term()]} | {:error, term()}
+  def all(tab_name) do
+    transaction(fn ->
+      tab_name
+      |> :mnesia.all_keys()
+      |> Enum.flat_map(fn key -> :mnesia.read(tab_name, key) end)
+    end)
+  end
+
   defp one(f) do
     case :mnesia.transaction(f) do
       {:atomic, []} -> {:error, :not_found}

@@ -10,6 +10,7 @@ defmodule MnesiaStore.MixProject do
       app: :mnesia_store,
       version: @version,
       elixir: "~> 1.17",
+      elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       description: "A thin wrapper for Mnesia",
       package: package(),
@@ -27,6 +28,9 @@ defmodule MnesiaStore.MixProject do
       extra_applications: [:logger, :mnesia]
     ]
   end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
 
   # Run "mix help deps" to learn about dependencies.
   defp deps do
