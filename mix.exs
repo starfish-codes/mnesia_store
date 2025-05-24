@@ -2,7 +2,7 @@ defmodule MnesiaStore.MixProject do
   use Mix.Project
 
   @name "MnesiaStore"
-  @version "1.0.0"
+  @version "1.1.0"
   @repo_url "https://github.com/starfish-codes/mnesia_store"
 
   def project do
