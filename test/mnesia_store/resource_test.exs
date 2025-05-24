@@ -26,11 +26,13 @@ defmodule MnesiaStore.ResourceTest do
 
     test "inspect supervisor", %{sup: sup} do
       assert [
+               {Session.Healer, healer, :worker, _healer_modules},
                {Session, :undefined, :worker, _resource_modules},
-               {Session.Cleaner, pid, :worker, _cleaner_modules}
+               {Session.Cleaner, cleaner, :worker, _cleaner_modules}
              ] = Supervisor.which_children(sup)
 
-      assert Process.alive?(pid)
+      assert Process.alive?(healer)
+      assert Process.alive?(cleaner)
     end
 
     test "put/fetch/delete" do
@@ -60,7 +62,8 @@ defmodule MnesiaStore.ResourceTest do
     sup = start_link_supervised!(SessionNoCleaner)
 
     assert [
-             {SessionNoCleaner, :undefined, :worker, _resource_modules}
+             {SessionNoCleaner.Healer, _pid, :worker, [MnesiaStore.Healer]},
+             {SessionNoCleaner, :undefined, :worker, [SessionNoCleaner]}
            ] = Supervisor.which_children(sup)
   end
 end

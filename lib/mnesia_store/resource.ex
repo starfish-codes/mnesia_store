@@ -44,11 +44,14 @@ defmodule MnesiaStore.Resource do
       end
 
       @spec init_table() :: :ignore | {:error, term()}
-      def init_table() do
+      def init_table do
         with :ok <- MnesiaStore.init_table(@tab_name, Keyword.keys(@attributes)) do
           :ignore
         end
       end
+
+      @spec all() :: {:ok, [term()]} | {:error, term()}
+      def all, do: MnesiaStore.all(@tab_name)
 
       @spec fetch(term()) :: {:ok, term()} | {:error, term()}
       def fetch(key) do
@@ -73,8 +76,11 @@ defmodule MnesiaStore.Resource do
       @spec delete(term) :: :ok | {:error, term()}
       def delete(key), do: MnesiaStore.remove(@tab_name, key)
 
-      @spec evict_expired() :: :ok
-      def evict_expired() do
+      @spec delete_table() :: :mnesia.t_result(:ok)
+      def delete_table, do: :mnesia.delete_table(@tab_name)
+
+      @spec evict_expired :: :ok
+      def evict_expired do
         now = DateTime.to_unix(DateTime.utc_now())
         pattern = unquote(record_name)(key: :"$1", value: :_, expires_at: :"$3")
         conditions = [{:<, :"$3", now}]
@@ -98,7 +104,7 @@ defmodule MnesiaStore.Resource do
 
   @spec child_specs(module(), term()) :: [Supervisor.module_spec()]
   def child_specs(mod, expires_in) do
-    basic = [resource_spec(mod)]
+    basic = [resource_spec(mod), healer_spec(mod)]
 
     if is_integer(expires_in) and expires_in > 0 do
       [{Highlander, cleaner_spec(mod)} | basic]
@@ -109,6 +115,10 @@ defmodule MnesiaStore.Resource do
 
   defp resource_spec(mod),
     do: %{id: mod, start: {mod, :init_table, []}}
+
+  defp healer_spec(mod),
+    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
+    do: %{id: Module.concat(mod, "Healer"), start: {MnesiaStore.Healer, :start_link, [mod]}}
 
   defp cleaner_spec(mod),
     # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
