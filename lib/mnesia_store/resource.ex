@@ -76,8 +76,13 @@ defmodule MnesiaStore.Resource do
       @spec delete(term) :: :ok | {:error, term()}
       def delete(key), do: MnesiaStore.remove(@tab_name, key)
 
-      @spec delete_table() :: :mnesia.t_result(:ok)
-      def delete_table, do: :mnesia.delete_table(@tab_name)
+      @spec delete_table() :: :ok | {:error, term()}
+      def delete_table do
+        case :mnesia.delete_table(@tab_name) do
+          {:atomic, :ok} -> :ok
+          {:aborted, reason} -> {:error, reason}
+        end
+      end
 
       @spec evict_expired :: :ok
       def evict_expired do

@@ -55,9 +55,9 @@ defmodule MnesiaStore.Healer do
   end
 
   defp reinit_table(nodes, resource_mod, data) do
-    resource_mod.delete_table()
-    Enum.each(nodes, &:erpc.call(&1, resource_mod, :init_table, []))
-    Enum.each(data, &MnesiaStore.put/1)
+    :ok = resource_mod.delete_table()
+    :ok = Enum.each(nodes, &:erpc.call(&1, resource_mod, :init_table, []))
+    :ok = Enum.each(data, &MnesiaStore.put/1)
   end
 
   defp schedule_check, do: Process.send_after(self(), :check, period())
