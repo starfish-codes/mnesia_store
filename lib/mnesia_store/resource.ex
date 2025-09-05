@@ -95,6 +95,8 @@ defmodule MnesiaStore.Resource do
           Enum.each(keys, &delete/1)
         end
       end
+
+      defoverridable evict_expired: 0
     end
   end
 
