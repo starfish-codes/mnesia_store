@@ -96,7 +96,7 @@ defmodule MnesiaStore.Resource do
         end
       end
 
-      defoverridable evict_expired: 0
+      defoverridable evict_expired: 0, delete: 1
     end
   end
 
