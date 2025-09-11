@@ -20,6 +20,17 @@ defmodule MnesiaStore.Resource do
 
   """
 
+  @doc """
+  This function will be called before deleting an expired record from the mnesia table.
+  Could be helpful if you want to notify some subsystem about expiration event or
+  to perform any cleanup actions related to the resource
+
+  It also allows you to prevent or postpone the deletion of particular key
+  by returning a `:skip` atom.
+  """
+  @callback before_expire(term()) :: :ok | :skip
+  @optional_callbacks before_expire: 1
+
   defmacro __using__(opts) do
     record_name = Keyword.get(opts, :record_name, :entry)
     expires_in_minutes = Keyword.get(opts, :expires_in_minutes, 15)
@@ -28,6 +39,8 @@ defmodule MnesiaStore.Resource do
       use Supervisor
 
       require Record
+
+      @behaviour unquote(__MODULE__)
 
       @tab_name __MODULE__
       @attributes [key: nil, value: nil, expires_at: nil]
@@ -84,19 +97,14 @@ defmodule MnesiaStore.Resource do
         end
       end
 
-      @spec evict_expired :: :ok
-      def evict_expired do
+      @spec expired :: {:ok, list()} | {:error, term()}
+      def expired do
         now = DateTime.to_unix(DateTime.utc_now())
         pattern = unquote(record_name)(key: :"$1", value: :_, expires_at: :"$3")
         conditions = [{:<, :"$3", now}]
         return = [:"$1"]
-
-        with {:ok, keys} <- MnesiaStore.select(@tab_name, [{pattern, conditions, return}]) do
-          Enum.each(keys, &delete/1)
-        end
+        MnesiaStore.select(@tab_name, [{pattern, conditions, return}])
       end
-
-      defoverridable evict_expired: 0
     end
   end
 
@@ -108,6 +116,28 @@ defmodule MnesiaStore.Resource do
   end
 
   def calc_expires_at(_minutes), do: :infinity
+
+  @spec evict_expired(module()) :: :ok | {:error, term()}
+  def evict_expired(mod) do
+    with {:ok, keys} <- mod.expired() do
+      Enum.each(keys, &evict_expired(mod, &1))
+    end
+  end
+
+  defp evict_expired(mod, key) do
+    if function_exported?(mod, :before_expire, 1) do
+      call_before_expire(mod, key)
+    else
+      mod.delete(key)
+    end
+  end
+
+  defp call_before_expire(mod, key) do
+    case mod.before_expire(key) do
+      :ok -> mod.delete(key)
+      :skip -> :ok
+    end
+  end
 
   @spec child_specs(module(), term()) :: [Supervisor.module_spec()]
   def child_specs(mod, expires_in) do
