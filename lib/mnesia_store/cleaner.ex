@@ -13,7 +13,7 @@ defmodule MnesiaStore.Cleaner do
 
   @impl GenServer
   def handle_info(:timeout, resource_mod) do
-    resource_mod.evict_expired()
+    MnesiaStore.Resource.evict_expired(resource_mod)
 
     {:noreply, resource_mod, @timeout}
   end
