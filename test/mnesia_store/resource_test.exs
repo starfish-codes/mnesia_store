@@ -38,6 +38,24 @@ defmodule MnesiaStore.ResourceTest do
     end
   end
 
+  defmodule AfterExpireCallback do
+    use MnesiaStore.Resource, record_name: :session
+
+    @spec put_expired(String.t(), term()) :: :ok
+    def put_expired(key, value) do
+      expires_at = DateTime.to_unix(DateTime.utc_now()) - 1
+
+      [key: key, value: value, expires_at: expires_at]
+      |> session()
+      |> MnesiaStore.put()
+    end
+
+    @impl MnesiaStore.Resource
+    def after_expire(key) do
+      send(self(), {:after_expire_called, key})
+    end
+  end
+
   describe "resource API" do
     setup do
       sup = start_link_supervised!(Session)
@@ -101,6 +119,16 @@ defmodule MnesiaStore.ResourceTest do
 
       assert {:error, :not_found} = BeforeExpireCallback.fetch(:foo)
       assert {:ok, _found} = BeforeExpireCallback.fetch(:bar)
+    end
+  end
+
+  describe "after_expire callback" do
+    test "calls after_expire after expiration" do
+      _sup = start_link_supervised!(AfterExpireCallback)
+      AfterExpireCallback.put_expired(:foo, :bar)
+      MnesiaStore.Resource.evict_expired(AfterExpireCallback)
+      assert_received {:after_expire_called, :foo}
+      assert {:error, :not_found} = AfterExpireCallback.fetch(:foo)
     end
   end
 end

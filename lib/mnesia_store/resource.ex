@@ -29,7 +29,13 @@ defmodule MnesiaStore.Resource do
   by returning a `:skip` atom.
   """
   @callback before_expire(term()) :: :ok | :skip
-  @optional_callbacks before_expire: 1
+
+  @doc """
+  This function will be called after the expired record was successfully deleted
+  from the mnesia table.
+  """
+  @callback after_expire(term()) :: :ok
+  @optional_callbacks before_expire: 1, after_expire: 1
 
   defmacro __using__(opts) do
     record_name = Keyword.get(opts, :record_name, :entry)
@@ -128,14 +134,28 @@ defmodule MnesiaStore.Resource do
     if function_exported?(mod, :before_expire, 1) do
       call_before_expire(mod, key)
     else
-      mod.delete(key)
+      delete(mod, key)
     end
   end
 
   defp call_before_expire(mod, key) do
     case mod.before_expire(key) do
-      :ok -> mod.delete(key)
+      :ok -> delete(mod, key)
       :skip -> :ok
+    end
+  end
+
+  defp delete(mod, key) do
+    with :ok <- mod.delete(key) do
+      call_after_expire(mod, key)
+    end
+  end
+
+  defp call_after_expire(mod, key) do
+    if function_exported?(mod, :after_expire, 1) do
+      mod.after_expire(key)
+    else
+      :ok
     end
   end
 
