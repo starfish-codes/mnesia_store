@@ -59,7 +59,7 @@ defmodule MnesiaStore.Resource do
       @impl Supervisor
       def init(_init_arg) do
         children = unquote(__MODULE__).child_specs(__MODULE__, @expires_in_minutes)
-        Supervisor.init(children, strategy: :one_for_one)
+        Supervisor.init(children, strategy: :one_for_all)
       end
 
       @spec init_table() :: :ignore | {:error, term()}
