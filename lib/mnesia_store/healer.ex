@@ -27,37 +27,44 @@ defmodule MnesiaStore.Healer do
   end
 
   defp perform_check(resource_mod) do
-    cstruct(cookie: cookie, ram_copies: nodes) = :mnesia_lib.val({resource_mod, :cstruct})
+    cstruct(cookie: cookie) = :mnesia_lib.val({resource_mod, :cstruct})
 
-    unless cookie_match?(resource_mod, cookie) do
-      reinit_table(nodes, resource_mod)
-    end
+    resource_mod
+    |> divergent_nodes(cookie)
+    |> reinit_table(resource_mod)
   end
 
-  defp cookie_match?(resource_mod, local_cookie) do
+  defp divergent_nodes(resource_mod, local_cookie) do
     :visible
     |> Node.list()
-    |> :erpc.multicall(:mnesia_lib, :val, [{resource_mod, :cstruct}])
-    |> Enum.all?(fn
-      {:ok, cstruct(cookie: foreign_cookie)} -> local_cookie == foreign_cookie
-      _error -> true
+    |> Enum.filter(fn node ->
+      case :erpc.call(node, :mnesia_lib, :val, [{resource_mod, :cstruct}]) do
+        cstruct(cookie: foreign_cookie) -> local_cookie != foreign_cookie
+        _error -> false
+      end
     end)
   end
 
-  defp reinit_table(nodes, resource_mod) do
-    case resource_mod.all() do
-      {:ok, data} ->
-        reinit_table(nodes, resource_mod, data)
+  defp reinit_table([], _resource_mod), do: :ok
 
-      {:error, reason} ->
-        Logger.error("Could not load #{resource_mod} data: " <> inspect(reason))
-    end
+  defp reinit_table(nodes, resource_mod) do
+    Enum.each(nodes, &migrate_data(&1, resource_mod))
+    :erpc.multicall(nodes, resource_mod, :delete_table, [])
+    :erpc.multicall(nodes, resource_mod, :init_table, [])
+
+    :ok
   end
 
-  defp reinit_table(nodes, resource_mod, data) do
-    :ok = resource_mod.delete_table()
-    :ok = Enum.each(nodes, &:erpc.call(&1, resource_mod, :init_table, []))
-    :ok = Enum.each(data, &MnesiaStore.put/1)
+  defp migrate_data(divergent_node, resource_mod) do
+    case :erpc.call(divergent_node, resource_mod, :all, []) do
+      {:ok, data} ->
+        Enum.each(data, &MnesiaStore.put/1)
+
+      {:error, reason} ->
+        Logger.error(
+          "Could not fetch #{resource_mod} data from #{divergent_node}: " <> inspect(reason)
+        )
+    end
   end
 
   defp schedule_check, do: Process.send_after(self(), :check, period())
