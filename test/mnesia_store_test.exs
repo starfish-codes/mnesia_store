@@ -39,6 +39,44 @@ defmodule MnesiaStoreTest do
     end
   end
 
+  describe "cluster join" do
+    test "starts the table locally when a peer never completes the schema merge" do
+      # A peer whose mnesia_controller does not answer makes
+      # :mnesia.change_config(:extra_db_nodes, _) block inside the schema merge.
+      [peer] = HayCluster.start_nodes(:mnesia_stuck, 1, applications: [:mnesia])
+      on_exit(fn -> HayCluster.stop_nodes([peer]) end)
+      :ok = :erpc.call(peer, :sys, :suspend, [:mnesia_controller])
+
+      tab_name = :stuck_peer
+      assert :ok = MnesiaStore.init_table(tab_name, ~w[name age]a)
+
+      assert [node()] == :mnesia.table_info(tab_name, :ram_copies)
+      assert :ok = MnesiaStore.put({tab_name, "bob", 27})
+      assert {:ok, {^tab_name, "bob", 27}} = MnesiaStore.fetch(tab_name, "bob")
+    end
+
+    test "comes up when peers hold divergent schemas of the table" do
+      # Two peers created the table independently, so their
+      # schema cookies conflict and the merge with the second peer fails.
+      nodes = HayCluster.start_nodes(:mnesia_split, 2, applications: [:mnesia])
+      on_exit(fn -> HayCluster.stop_nodes(nodes) end)
+
+      tab_name = :split_brain
+      attrs = ~w[name age]a
+
+      for remote_node <- nodes do
+        opts = [ram_copies: [remote_node], attributes: attrs]
+        {:atomic, :ok} = :erpc.call(remote_node, :mnesia, :create_table, [tab_name, opts])
+      end
+
+      assert :ok = MnesiaStore.init_table(tab_name, attrs)
+
+      assert node() in :mnesia.table_info(tab_name, :ram_copies)
+      assert :ok = MnesiaStore.put({tab_name, "alice", 47})
+      assert {:ok, {^tab_name, "alice", 47}} = MnesiaStore.fetch(tab_name, "alice")
+    end
+  end
+
   describe "search" do
     setup do
       attrs = ~w[name calories price group]a

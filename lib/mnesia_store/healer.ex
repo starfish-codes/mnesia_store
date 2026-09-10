@@ -27,11 +27,16 @@ defmodule MnesiaStore.Healer do
   end
 
   defp perform_check(resource_mod) do
-    cstruct(cookie: cookie) = :mnesia_lib.val({resource_mod, :cstruct})
+    if resource_mod in :mnesia.system_info(:tables) do
+      cstruct(cookie: cookie) = :mnesia_lib.val({resource_mod, :cstruct})
 
-    resource_mod
-    |> divergent_nodes(cookie)
-    |> reinit_table(resource_mod)
+      resource_mod
+      |> divergent_nodes(cookie)
+      |> reinit_table(resource_mod)
+    else
+      # The boot-time init_table failed; try again now that the cluster may have settled.
+      resource_mod.init_table()
+    end
   end
 
   defp divergent_nodes(resource_mod, local_cookie) do

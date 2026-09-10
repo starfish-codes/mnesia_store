@@ -62,11 +62,13 @@ defmodule MnesiaStore.Resource do
         Supervisor.init(children, strategy: :one_for_all)
       end
 
-      @spec init_table() :: :ignore | {:error, term()}
+      # Child start of the resource supervisor. A table that could not be set
+      # up must never fail the supervision tree: MnesiaStore logs the reason
+      # and the Healer retries on its next check.
+      @spec init_table() :: :ignore
       def init_table do
-        with :ok <- MnesiaStore.init_table(@tab_name, Keyword.keys(@attributes)) do
-          :ignore
-        end
+        _result = MnesiaStore.init_table(@tab_name, Keyword.keys(@attributes))
+        :ignore
       end
 
       @spec all() :: {:ok, [term()]} | {:error, term()}
