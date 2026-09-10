@@ -1,75 +1,41 @@
 defmodule MnesiaStore.ResourceTest do
   use ExUnit.Case, async: false
 
-  defmodule Session do
-    use MnesiaStore.Resource, record_name: :session
+  alias MnesiaStore.ResourceFixtures.{
+    AfterExpireCallback,
+    BeforeExpireCallback,
+    Session,
+    SessionNoCleaner
+  }
 
-    @spec put_expired(String.t(), term()) :: :ok
-    def put_expired(key, value) do
-      expires_at = DateTime.to_unix(DateTime.utc_now()) - 1
+  setup do
+    # Each test owns a fresh RAM database, independent of legacy API tests.
+    :stopped = :mnesia.stop()
+    :ok = :mnesia.start()
 
-      [key: key, value: value, expires_at: expires_at]
-      |> session()
-      |> MnesiaStore.put()
-    end
-  end
+    start_supervised!(
+      {MnesiaStore.Supervisor,
+       resources: [Session, SessionNoCleaner, BeforeExpireCallback, AfterExpireCallback],
+       nodes: [],
+       discovery_timeout: 0,
+       check_interval: :infinity}
+    )
 
-  defmodule SessionNoCleaner do
-    use MnesiaStore.Resource, expires_in_minutes: false
-  end
-
-  defmodule BeforeExpireCallback do
-    use MnesiaStore.Resource, record_name: :session
-
-    @spec put_expired(String.t(), term()) :: :ok
-    def put_expired(key, value) do
-      expires_at = DateTime.to_unix(DateTime.utc_now()) - 1
-
-      [key: key, value: value, expires_at: expires_at]
-      |> session()
-      |> MnesiaStore.put()
-    end
-
-    @impl MnesiaStore.Resource
-    def before_expire(key) do
-      {:ok, {pid, result}} = fetch(key)
-      send(pid, {:before_expire_called, key})
-      result
-    end
-  end
-
-  defmodule AfterExpireCallback do
-    use MnesiaStore.Resource, record_name: :session
-
-    @spec put_expired(String.t(), term()) :: :ok
-    def put_expired(key, value) do
-      expires_at = DateTime.to_unix(DateTime.utc_now()) - 1
-
-      [key: key, value: value, expires_at: expires_at]
-      |> session()
-      |> MnesiaStore.put()
-    end
-
-    @impl MnesiaStore.Resource
-    def after_expire(key) do
-      send(self(), {:after_expire_called, key})
-    end
+    assert :ok = MnesiaStore.await_ready()
+    :ok
   end
 
   describe "resource API" do
     setup do
-      sup = start_link_supervised!(Session)
+      sup = Process.whereis(Session)
       %{sup: sup}
     end
 
     test "inspect supervisor", %{sup: sup} do
       assert [
-               {Session.Healer, healer, :worker, _healer_modules},
-               {Session, :undefined, :worker, _resource_modules},
                {Session.Cleaner, cleaner, :worker, _cleaner_modules}
              ] = Supervisor.which_children(sup)
 
-      assert Process.alive?(healer)
       assert Process.alive?(cleaner)
     end
 
@@ -97,18 +63,13 @@ defmodule MnesiaStore.ResourceTest do
   end
 
   test "can be started without cleaner" do
-    sup = start_link_supervised!(SessionNoCleaner)
+    sup = Process.whereis(SessionNoCleaner)
 
-    assert [
-             {SessionNoCleaner.Healer, _pid, :worker, [MnesiaStore.Healer]},
-             {SessionNoCleaner, :undefined, :worker, [SessionNoCleaner]}
-           ] = Supervisor.which_children(sup)
+    assert [] = Supervisor.which_children(sup)
   end
 
   describe "before_expire callback" do
     test "calls before_expire before expiration" do
-      _sup = start_link_supervised!(BeforeExpireCallback)
-
       BeforeExpireCallback.put_expired(:foo, {self(), :ok})
       BeforeExpireCallback.put_expired(:bar, {self(), :skip})
 
@@ -124,7 +85,6 @@ defmodule MnesiaStore.ResourceTest do
 
   describe "after_expire callback" do
     test "calls after_expire after expiration" do
-      _sup = start_link_supervised!(AfterExpireCallback)
       AfterExpireCallback.put_expired(:foo, :bar)
       MnesiaStore.Resource.evict_expired(AfterExpireCallback)
       assert_received {:after_expire_called, :foo}
