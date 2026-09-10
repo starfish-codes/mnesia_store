@@ -9,10 +9,10 @@ defmodule MnesiaStore.Resource do
         use MnesiaStore.Resource
       end
 
-  Don't forget to put it to your application supervisor
+  Declare all resources in the database supervisor:
 
       children = [
-        Session
+        {MnesiaStore.Supervisor, resources: [Session]}
       ]
 
   It will ensure that the corresonding table is created on all the nodes and
@@ -51,30 +51,53 @@ defmodule MnesiaStore.Resource do
       @tab_name __MODULE__
       @attributes [key: nil, value: nil, expires_at: nil]
       @expires_in_minutes unquote(expires_in_minutes)
+      @cleaner_spec %{
+        id: __MODULE__.Cleaner,
+        start: {MnesiaStore.Cleaner, :start_link, [__MODULE__]}
+      }
 
       Record.defrecord(unquote(record_name), @tab_name, @attributes)
 
-      def start_link(init_arg), do: Supervisor.start_link(__MODULE__, init_arg)
+      def start_link(:managed) do
+        Supervisor.start_link(__MODULE__, :managed, name: __MODULE__)
+      end
+
+      def start_link(_init_arg) do
+        {:error, :mnesia_store_supervisor_required}
+      end
+
+      @doc false
+      def __mnesia_store__ do
+        {@tab_name, Keyword.keys(@attributes)}
+      end
+
+      @doc false
+      def __mnesia_store_cleaner__ do
+        @cleaner_spec
+      end
 
       @impl Supervisor
-      def init(_init_arg) do
+      def init(:managed) do
         children = unquote(__MODULE__).child_specs(__MODULE__, @expires_in_minutes)
         Supervisor.init(children, strategy: :one_for_all)
       end
 
       @spec init_table() :: :ignore | {:error, term()}
       def init_table do
-        with :ok <- MnesiaStore.init_table(@tab_name, Keyword.keys(@attributes)) do
+        with :ok <- MnesiaStore.managed_init_table(@tab_name, Keyword.keys(@attributes)) do
           :ignore
         end
       end
 
       @spec all() :: {:ok, [term()]} | {:error, term()}
-      def all, do: MnesiaStore.all(@tab_name)
+      def all do
+        MnesiaStore.with_access(fn -> MnesiaStore.all(@tab_name) end)
+      end
 
       @spec fetch(term()) :: {:ok, term()} | {:error, term()}
       def fetch(key) do
-        with {:ok, unquote(record_name)(value: value)} <- MnesiaStore.fetch(@tab_name, key) do
+        with {:ok, unquote(record_name)(value: value)} <-
+               MnesiaStore.with_access(fn -> MnesiaStore.fetch(@tab_name, key) end) do
           {:ok, value}
         end
       end
@@ -87,20 +110,23 @@ defmodule MnesiaStore.Resource do
       def put(key, value) do
         expires_at = unquote(__MODULE__).calc_expires_at(@expires_in_minutes)
 
-        [key: key, value: value, expires_at: expires_at]
-        |> unquote(record_name)()
-        |> MnesiaStore.put()
+        record = unquote(record_name)(key: key, value: value, expires_at: expires_at)
+        MnesiaStore.with_access(fn -> MnesiaStore.put(record) end)
       end
 
       @spec delete(term) :: :ok | {:error, term()}
-      def delete(key), do: MnesiaStore.remove(@tab_name, key)
+      def delete(key) do
+        MnesiaStore.with_access(fn -> MnesiaStore.remove(@tab_name, key) end)
+      end
 
       @spec delete_table() :: :ok | {:error, term()}
       def delete_table do
-        case :mnesia.delete_table(@tab_name) do
-          {:atomic, :ok} -> :ok
-          {:aborted, reason} -> {:error, reason}
-        end
+        MnesiaStore.with_access(fn ->
+          case :mnesia.delete_table(@tab_name) do
+            {:atomic, :ok} -> :ok
+            {:aborted, reason} -> {:error, reason}
+          end
+        end)
       end
 
       @spec expired :: {:ok, list()} | {:error, term()}
@@ -109,7 +135,10 @@ defmodule MnesiaStore.Resource do
         pattern = unquote(record_name)(key: :"$1", value: :_, expires_at: :"$3")
         conditions = [{:<, :"$3", now}]
         return = [:"$1"]
-        MnesiaStore.select(@tab_name, [{pattern, conditions, return}])
+
+        MnesiaStore.with_access(fn ->
+          MnesiaStore.select(@tab_name, [{pattern, conditions, return}])
+        end)
       end
     end
   end
@@ -121,7 +150,9 @@ defmodule MnesiaStore.Resource do
     |> DateTime.to_unix()
   end
 
-  def calc_expires_at(_minutes), do: :infinity
+  def calc_expires_at(_minutes) do
+    :infinity
+  end
 
   @spec evict_expired(module()) :: :ok | {:error, term()}
   def evict_expired(mod) do
@@ -161,23 +192,10 @@ defmodule MnesiaStore.Resource do
 
   @spec child_specs(module(), term()) :: [Supervisor.module_spec()]
   def child_specs(mod, expires_in) do
-    basic = [resource_spec(mod), healer_spec(mod)]
-
     if is_integer(expires_in) and expires_in > 0 do
-      [{Highlander, cleaner_spec(mod)} | basic]
+      [{Highlander, mod.__mnesia_store_cleaner__()}]
     else
-      basic
+      []
     end
   end
-
-  defp resource_spec(mod),
-    do: %{id: mod, start: {mod, :init_table, []}}
-
-  defp healer_spec(mod),
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    do: %{id: Module.concat(mod, "Healer"), start: {MnesiaStore.Healer, :start_link, [mod]}}
-
-  defp cleaner_spec(mod),
-    # credo:disable-for-next-line Credo.Check.Warning.UnsafeToAtom
-    do: %{id: Module.concat(mod, "Cleaner"), start: {MnesiaStore.Cleaner, :start_link, [mod]}}
 end
