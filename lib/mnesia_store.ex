@@ -41,6 +41,20 @@ defmodule MnesiaStore do
   @spec put(tuple()) :: :ok | {:error, term()}
   def put(record), do: transaction(fn -> :mnesia.write(record) end)
 
+  @doc "Writes the record unless a record with the same key already exists."
+  @spec put_new(tuple()) :: :ok | {:error, term()}
+  def put_new(record) do
+    tab_name = elem(record, 0)
+    key = elem(record, 1)
+
+    transaction(fn ->
+      case :mnesia.read(tab_name, key) do
+        [] -> :mnesia.write(record)
+        _existing -> :ok
+      end
+    end)
+  end
+
   @spec fetch(atom(), term()) :: {:ok, term()} | {:error, term()}
   def fetch(tab_name, id), do: one(fn -> :mnesia.read(tab_name, id) end)
 
@@ -90,9 +104,26 @@ defmodule MnesiaStore do
 
   # The schema merge behind `:mnesia.change_config/2` is a transaction that
   # Mnesia retries forever, so the call can block indefinitely when a peer's
-  # view of the cluster is inconsistent (e.g. a peer went down mid-merge).
-  # Bound it so a supervision tree waiting on us can carry on.
+  # view of the cluster is inconsistent. Bound it so a supervision tree waiting
+  # on us can carry on.
+  #
+  # A join that never completes means a peer still lists this node among its
+  # running db nodes from an earlier merge that was aborted halfway (a node went
+  # down mid-merge). Only a nodedown clears that entry on the peer, so drop and
+  # re-establish the connections and try once more before giving up.
   defp join_cluster(nodes) do
+    case join(nodes) do
+      {:error, :timeout} ->
+        Logger.warning("Mnesia cluster join timed out; reconnecting to peers and retrying once")
+        reconnect(nodes -- [node()])
+        join(nodes)
+
+      result ->
+        result
+    end
+  end
+
+  defp join(nodes) do
     task = Task.async(fn -> :mnesia.change_config(:extra_db_nodes, nodes) end)
 
     case Task.yield(task, join_timeout()) do
@@ -102,11 +133,18 @@ defmodule MnesiaStore do
     end
   end
 
+  defp reconnect(peers) do
+    Enum.each(peers, &:erlang.disconnect_node/1)
+    Enum.each(peers, &Node.connect/1)
+  end
+
   # `:mnesia.change_config/2` spawns `mnesia_controller:connect_nodes2/3`, which
   # traps exits and runs the merge in a schema transaction whose coordinator is
   # linked to `mnesia_controller` only. Killing just the task would leave both
   # behind, with the merge holding the schema write lock that `create_table`
   # needs next, so stop them explicitly once the task (and its link to us) is gone.
+  # Only coordinators spawned by our merge are touched; an unrelated schema
+  # transaction running at the same time keeps its coordinator.
   defp abort_join(task) do
     mergers = linked(task.pid, {:mnesia_controller, :connect_nodes2, 3})
 
@@ -115,12 +153,31 @@ defmodule MnesiaStore do
         result
 
       _not_finished ->
-        coordinators =
-          linked(Process.whereis(:mnesia_controller), {:mnesia_schema, :schema_coordinator, 3})
-
-        Enum.each(mergers ++ coordinators, &Process.exit(&1, :kill))
+        stop_merge(mergers)
         {:error, :timeout}
     end
+  end
+
+  defp stop_merge([]) do
+    Logger.error(
+      "Mnesia cluster join timed out but no merge process was found to stop; " <>
+        "the schema lock may still be held and table creation can block"
+    )
+  end
+
+  defp stop_merge(mergers) do
+    coordinators =
+      :mnesia_controller
+      |> Process.whereis()
+      |> linked({:mnesia_schema, :schema_coordinator, 3})
+      |> Enum.filter(fn pid ->
+        case :erlang.process_info(pid, :parent) do
+          {:parent, parent} -> parent in mergers
+          _gone -> false
+        end
+      end)
+
+    Enum.each(mergers ++ coordinators, &Process.exit(&1, :kill))
   end
 
   defp linked(nil, _initial_call), do: []

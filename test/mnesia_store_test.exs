@@ -47,12 +47,59 @@ defmodule MnesiaStoreTest do
       on_exit(fn -> HayCluster.stop_nodes([peer]) end)
       :ok = :erpc.call(peer, :sys, :suspend, [:mnesia_controller])
 
+      # An unrelated schema transaction queued behind the stuck merge must
+      # survive the abort and complete once the lock is released.
+      bystander =
+        Task.async(fn ->
+          Process.sleep(500)
+          :mnesia.create_table(:bystander, ram_copies: [node()], attributes: ~w[k v]a)
+        end)
+
       tab_name = :stuck_peer
       assert :ok = MnesiaStore.init_table(tab_name, ~w[name age]a)
 
-      assert [node()] == :mnesia.table_info(tab_name, :ram_copies)
+      assert node() in :mnesia.table_info(tab_name, :ram_copies)
       assert :ok = MnesiaStore.put({tab_name, "bob", 27})
       assert {:ok, {^tab_name, "bob", 27}} = MnesiaStore.fetch(tab_name, "bob")
+
+      assert {:atomic, :ok} = Task.await(bystander, :timer.seconds(5))
+    end
+
+    test "recovers a join that a peer's stale view of this node would block forever" do
+      # A peer that still lists this node among its running db nodes (left over
+      # from a merge aborted halfway) makes Mnesia abort and retry our schema
+      # merge indefinitely. Dropping the connection clears the entry on the peer.
+      # hay_cluster peers die with the distribution link, so start this one with
+      # a stdio control channel.
+      peer = start_standalone_peer(:mnesia_stale)
+      _db_nodes = :erpc.call(peer, :mnesia_lib, :add, [{:current, :db_nodes}, node()])
+
+      tab_name = :stale_peer
+      {elapsed_us, result} = :timer.tc(fn -> MnesiaStore.init_table(tab_name, ~w[name age]a) end)
+      assert :ok = result
+      assert elapsed_us >= 2_000_000, "the first join attempt must have timed out"
+
+      assert peer in :mnesia.system_info(:running_db_nodes)
+
+      ram_copies = :mnesia.table_info(tab_name, :ram_copies)
+      assert Enum.sort([node(), peer]) == Enum.sort(ram_copies)
+    end
+
+    defp start_standalone_peer(prefix) do
+      {:ok, pid, peer} =
+        :peer.start(%{
+          name: :peer.random_name(prefix),
+          longnames: true,
+          host: ~c"127.0.0.1",
+          connection: :standard_io,
+          args: [~c"-setcookie", Atom.to_charlist(Node.get_cookie())]
+        })
+
+      on_exit(fn -> :peer.stop(pid) end)
+      :ok = :peer.call(pid, :code, :add_paths, [:code.get_path()])
+      {:ok, _apps} = :peer.call(pid, Application, :ensure_all_started, [:mnesia])
+      true = Node.connect(peer)
+      peer
     end
 
     test "comes up when peers hold divergent schemas of the table" do

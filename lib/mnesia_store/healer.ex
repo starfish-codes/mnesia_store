@@ -1,6 +1,13 @@
 defmodule MnesiaStore.Healer do
   @moduledoc false
 
+  # Reconciles a table whose schema diverged between nodes that can see each
+  # other (independently created copies have different cookies and cannot be
+  # merged). Nodes sharing a cookie form a group; the largest group wins, ties
+  # go to the group holding the lexically smallest node name. Only a loser
+  # acts, and only on itself: it drops its copy, rejoins the cluster and writes
+  # its rows back without overwriting the winner's. Peers are never touched.
+
   use GenServer
 
   require Logger
@@ -9,6 +16,7 @@ defmodule MnesiaStore.Healer do
   Record.defrecordp(:cstruct, Record.extract(:cstruct, from_lib: "mnesia/src/mnesia.hrl"))
 
   @timeout :timer.minutes(5)
+  @retry :timer.seconds(30)
 
   @spec start_link(module()) :: GenServer.on_start()
   def start_link(resource_mod), do: GenServer.start_link(__MODULE__, resource_mod)
@@ -21,58 +29,72 @@ defmodule MnesiaStore.Healer do
 
   @impl GenServer
   def handle_info(:check, resource_mod) do
-    schedule_check()
-    perform_check(resource_mod)
+    resource_mod
+    |> perform_check()
+    |> schedule_check()
+
     {:noreply, resource_mod}
   end
 
+  # Returns the delay until the next check.
   defp perform_check(resource_mod) do
-    if resource_mod in :mnesia.system_info(:tables) do
-      cstruct(cookie: cookie) = :mnesia_lib.val({resource_mod, :cstruct})
-
-      resource_mod
-      |> divergent_nodes(cookie)
-      |> reinit_table(resource_mod)
+    if resource_mod in :mnesia.system_info(:local_tables) do
+      if loser?(resource_mod), do: rejoin(resource_mod)
+      period()
     else
-      # The boot-time init_table failed; try again now that the cluster may have settled.
+      # No local copy: the boot-time init_table failed or could not add the
+      # copy. Try again soon rather than on the regular schedule.
       resource_mod.init_table()
+      @retry
     end
   end
 
-  defp divergent_nodes(resource_mod, local_cookie) do
-    :visible
-    |> Node.list()
-    |> Enum.filter(fn node ->
-      case :erpc.call(node, :mnesia_lib, :val, [{resource_mod, :cstruct}]) do
-        cstruct(cookie: foreign_cookie) -> local_cookie != foreign_cookie
-        _error -> false
-      end
-    end)
+  defp loser?(resource_mod) do
+    {:ok, local_cookie} = cookie(node(), resource_mod)
+
+    peers =
+      for peer <- Node.list(:visible),
+          {:ok, peer_cookie} <- [cookie(peer, resource_mod)],
+          do: {peer, peer_cookie}
+
+    local_cookie != winner_cookie([{node(), local_cookie} | peers])
   end
 
-  defp reinit_table([], _resource_mod), do: :ok
+  # Largest group of nodes sharing a cookie wins; ties go to the group holding
+  # the lexically smallest node name.
+  defp winner_cookie(node_cookies) do
+    {cookie, _nodes} =
+      node_cookies
+      |> Enum.group_by(fn {_node, cookie} -> cookie end, fn {node, _cookie} -> node end)
+      |> Enum.min_by(fn {_cookie, nodes} -> {-length(nodes), Enum.min(nodes)} end)
 
-  defp reinit_table(nodes, resource_mod) do
-    Enum.each(nodes, &migrate_data(&1, resource_mod))
-    :erpc.multicall(nodes, resource_mod, :delete_table, [])
-    :erpc.multicall(nodes, resource_mod, :init_table, [])
-
-    :ok
+    cookie
   end
 
-  defp migrate_data(divergent_node, resource_mod) do
-    case :erpc.call(divergent_node, resource_mod, :all, []) do
-      {:ok, data} ->
-        Enum.each(data, &MnesiaStore.put/1)
+  defp cookie(node, resource_mod) do
+    cstruct(cookie: cookie) = :erpc.call(node, :mnesia_lib, :val, [{resource_mod, :cstruct}])
+    {:ok, cookie}
+  catch
+    # The peer is unreachable or does not know the table.
+    _class, _reason -> :error
+  end
 
+  defp rejoin(resource_mod) do
+    Logger.warning(
+      "Table [#{resource_mod}] diverged from the cluster; dropping the local copy and rejoining"
+    )
+
+    with {:ok, records} <- resource_mod.all(),
+         :ok <- resource_mod.delete_table() do
+      resource_mod.init_table()
+      Enum.each(records, &MnesiaStore.put_new/1)
+    else
       {:error, reason} ->
-        Logger.error(
-          "Could not fetch #{resource_mod} data from #{divergent_node}: " <> inspect(reason)
-        )
+        Logger.error("Could not rejoin [#{resource_mod}]: " <> inspect(reason))
     end
   end
 
-  defp schedule_check, do: Process.send_after(self(), :check, period())
+  defp schedule_check(delay), do: Process.send_after(self(), :check, delay)
 
   defp period do
     jitter =
